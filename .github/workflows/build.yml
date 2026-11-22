@@ -3,15 +3,347 @@ name: Build APK
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Generate project files
+        run: |
+          mkdir -p app/src/main/java/com/example/cc
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "ControlCenter"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.20" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+          android {
+              namespace = "com.example.cc"
+              compileSdk = 35
+              defaultConfig {
+                  applicationId = "com.example.cc"
+                  minSdk = 29
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              buildFeatures { compose = true }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
+              implementation(composeBom)
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+              implementation("androidx.activity:activity-compose:1.9.2")
+              implementation("androidx.core:core-ktx:1.13.1")
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="true"
+                  android:label="Control Center"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:theme="@android:style/Theme.Material.NoActionBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/com/example/cc/MainActivity.kt <<'EOF'
+          package com.example.cc
 
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.isSystemInDarkTheme
+          import androidx.compose.material3.MaterialTheme
+          import androidx.compose.material3.darkColorScheme
+          import androidx.compose.material3.lightColorScheme
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent {
+                      MaterialTheme(
+                          colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+                      ) {
+                          ControlCenterScreen()
+                      }
+                  }
+              }
+          }
+          EOF
+          cat > app/src/main/java/com/example/cc/ControlCenterScreen.kt <<'EOF'
+          package com.example.cc
+
+          import android.content.Context
+          import android.content.Intent
+          import android.hardware.camera2.CameraManager
+          import android.media.AudioManager
+          import android.provider.Settings
+          import androidx.compose.foundation.Canvas
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.gestures.detectVerticalDragGestures
+          import androidx.compose.foundation.isSystemInDarkTheme
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.rememberScrollState
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.foundation.verticalScroll
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.automirrored.filled.VolumeUp
+          import androidx.compose.material.icons.filled.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.geometry.Size
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.vector.ImageVector
+          import androidx.compose.ui.input.pointer.pointerInput
+          import androidx.compose.ui.layout.onSizeChanged
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.Dp
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+
+          private val Pill = RoundedCornerShape(50)
+          private val Card = RoundedCornerShape(40.dp)
+
+          @Composable
+          fun ControlCenterScreen() {
+              val ctx = LocalContext.current
+              val audio = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
+              val camera = remember { ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager }
+
+              var torchOn by remember { mutableStateOf(false) }
+              var focusOn by remember { mutableStateOf(false) }
+              var lowPower by remember { mutableStateOf(false) }
+              var locked by remember { mutableStateOf(false) }
+              var brightness by remember { mutableFloatStateOf(0.6f) }
+              var volume by remember {
+                  mutableFloatStateOf(
+                      audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                          audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                  )
+              }
+
+              val dark = isSystemInDarkTheme()
+              val bg = if (dark) Color.Black else Color(0xFFEDEDF2)
+              val glass = if (dark) Color(0x33FFFFFF) else Color(0x33000000)
+              val fg = if (dark) Color.White else Color.Black
+              val inverse = if (dark) Color.Black else Color.White
+
+              Column(
+                  modifier = Modifier
+                      .fillMaxSize()
+                      .background(bg)
+                      .verticalScroll(rememberScrollState())
+                      .padding(horizontal = 16.dp, vertical = 48.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
+              ) {
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                      Round(Icons.Default.Add, glass, fg, 44.dp) { }
+                      Round(Icons.Default.PowerSettingsNew, glass, fg, 44.dp) {
+                          open(ctx, Settings.ACTION_SETTINGS)
+                      }
+                  }
+
+                  Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                          Tile("Airplane Mode", "Off", Icons.Default.AirplanemodeActive, false,
+                              Color(0xFFFF9500), glass, fg) { open(ctx, Settings.ACTION_AIRPLANE_MODE_SETTINGS) }
+                          Tile("Bluetooth", "Settings", Icons.Default.Bluetooth, false,
+                              Color(0xFF0A84FF), glass, fg) { open(ctx, Settings.ACTION_BLUETOOTH_SETTINGS) }
+                          Tile("Low Power", if (lowPower) "On" else "Off", Icons.Default.BatteryChargingFull,
+                              lowPower, Color(0xFFFFD60A), glass, Color.Black) { lowPower = !lowPower }
+                          Tile("Orientation", if (locked) "Locked" else "Unlocked", Icons.Default.ScreenLockRotation,
+                              locked, Color(0xFFFF6482), glass, Color.Black) { locked = !locked }
+                      }
+                      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                          Tile("Wi-Fi", "Settings", Icons.Default.Wifi, true,
+                              Color(0xFF0A84FF), glass, Color.White) { open(ctx, Settings.Panel.ACTION_WIFI) }
+                          Tile("Cellular Data", "On", Icons.Default.SignalCellularAlt, true,
+                              Color(0xFF30D158), glass, Color.White) { open(ctx, Settings.Panel.ACTION_INTERNET_CONNECTIVITY) }
+                          Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(168.dp)) {
+                              VSlider(brightness, { brightness = it }, Icons.Default.LightMode,
+                                  fg, glass, fg, Modifier.weight(1f))
+                              VSlider(volume, {
+                                  volume = it
+                                  audio.setStreamVolume(
+                                      AudioManager.STREAM_MUSIC,
+                                      (it * audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)).toInt(),
+                                      0
+                                  )
+                              }, Icons.AutoMirrored.Filled.VolumeUp, inverse, glass, fg, Modifier.weight(1f))
+                          }
+                      }
+                  }
+
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                      Tile("Focus", if (focusOn) "On" else null, Icons.Default.Person, focusOn,
+                          Color(0xFF5E5CE6), glass, Color.White, Modifier.weight(1f)) { focusOn = !focusOn }
+                      Round(Icons.Default.Radio, glass, fg, 84.dp) { }
+                      Round(Icons.Default.FiberManualRecord, Color(0xFFFF3B30), Color.White, 84.dp) { }
+                  }
+
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                      Round(Icons.Default.FlashlightOn, if (torchOn) Color.White else glass,
+                          if (torchOn) Color.Black else fg, 84.dp) {
+                          torchOn = !torchOn
+                          runCatching { camera.setTorchMode(camera.cameraIdList.first(), torchOn) }
+                      }
+                      Round(Icons.Default.Timer, glass, fg, 84.dp) { open(ctx, Settings.ACTION_DATE_SETTINGS) }
+                      Round(Icons.Default.MusicNote, glass, fg, 84.dp) { }
+                      Round(Icons.Default.Face, glass, fg, 84.dp) { }
+                  }
+
+                  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                      Round(Icons.Default.Notifications, glass, fg, 84.dp) { }
+                      Round(Icons.Default.DirectionsCar, glass, fg, 84.dp) { }
+                      Round(Icons.Default.Language, glass, fg, 84.dp) { }
+                      Round(Icons.Default.Calculate, glass, fg, 84.dp) { }
+                  }
+
+                  Surface(shape = Card, color = glass, modifier = Modifier.fillMaxWidth().height(140.dp)) {
+                      Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                          Box(Modifier.size(100.dp).clip(RoundedCornerShape(24.dp)).background(Color(0x22808080)))
+                          Spacer(Modifier.width(16.dp))
+                          Column(Modifier.weight(1f)) {
+                              Text("Not Playing", color = fg, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                              Spacer(Modifier.height(12.dp))
+                              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                  Icon(Icons.Default.FastRewind, null, tint = fg)
+                                  Icon(Icons.Default.PlayArrow, null, tint = fg)
+                                  Icon(Icons.Default.FastForward, null, tint = fg)
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          private fun open(ctx: Context, action: String) {
+              ctx.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+          }
+
+          @Composable
+          private fun Round(icon: ImageVector, bg: Color, tint: Color, size: Dp, onClick: () -> Unit) {
+              Box(
+                  Modifier.size(size).clip(Pill).background(bg).clickable(onClick = onClick),
+                  contentAlignment = Alignment.Center
+              ) { Icon(icon, null, tint = tint) }
+          }
+
+          @Composable
+          private fun Tile(
+              title: String,
+              subtitle: String?,
+              icon: ImageVector,
+              active: Boolean,
+              activeColor: Color,
+              inactive: Color,
+              onActive: Color,
+              modifier: Modifier = Modifier,
+              onClick: () -> Unit
+          ) {
+              Row(
+                  modifier
+                      .fillMaxWidth()
+                      .height(84.dp)
+                      .clip(Pill)
+                      .background(if (active) activeColor else inactive)
+                      .clickable(onClick = onClick)
+                      .padding(horizontal = 16.dp),
+                  verticalAlignment = Alignment.CenterVertically
+              ) {
+                  Icon(icon, null, tint = if (active) onActive else MaterialTheme.colorScheme.onSurface)
+                  Spacer(Modifier.width(12.dp))
+                  Column {
+                      Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                          color = if (active) onActive else MaterialTheme.colorScheme.onSurface)
+                      if (subtitle != null) {
+                          Text(subtitle, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          private fun VSlider(
+              value: Float,
+              onChange: (Float) -> Unit,
+              icon: ImageVector,
+              iconTint: Color,
+              track: Color,
+              fill: Color,
+              modifier: Modifier = Modifier
+          ) {
+              var height by remember { mutableFloatStateOf(1f) }
+              val latest = rememberUpdatedState(onChange)
+              Box(
+                  modifier
+                      .clip(Card)
+                      .background(track)
+                      .onSizeChanged { height = it.height.toFloat() }
+                      .pointerInput(Unit) {
+                          detectVerticalDragGestures { change, _ ->
+                              latest.value((1f - change.position.y / height).coerceIn(0f, 1f))
+                          }
+                      },
+                  contentAlignment = Alignment.BottomCenter
+              ) {
+                  Canvas(Modifier.fillMaxSize()) {
+                      drawRect(
+                          color = fill,
+                          topLeft = Offset(0f, size.height * (1f - value)),
+                          size = Size(size.width, size.height * value)
+                      )
+                  }
+                  Icon(icon, null, tint = iconTint, modifier = Modifier.padding(bottom = 16.dp))
+              }
+          }
+          EOF
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
